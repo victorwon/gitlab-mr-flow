@@ -315,10 +315,32 @@ async function activate(context) { // Restored async
 
             if (pushResult.exitCode === 0) {
                 outputChannel.appendLine('Push and MR creation command successful.');
-                // Check stdout/stderr for GitLab's confirmation message if needed, but a success code is usually enough
-                vscode.window.showInformationMessage(`Successfully pushed ${currentBranch} and initiated Merge Request creation targeting ${targetBranch}.`);
 
-                // --- Step 8: Switch back to target branch locally ---
+                // --- Step 8: Parse MR URL and Open in Browser ---
+                let mrUrl = null;
+                const output = `${pushResult.stdout}\n${pushResult.stderr}`; // Combine stdout and stderr
+                const urlRegex = /remote:\s+(https?:\/\/[^\s]+)/i;
+                const match = output.match(urlRegex);
+
+                if (match && match[1]) {
+                    mrUrl = match[1];
+                    outputChannel.appendLine(`Found MR URL: ${mrUrl}`);
+                    try {
+                        await vscode.env.openExternal(vscode.Uri.parse(mrUrl));
+                        outputChannel.appendLine(`Opened MR URL in browser.`);
+                        vscode.window.showInformationMessage(`Successfully created Merge Request targeting ${targetBranch} and opened it in your browser.`);
+                    } catch (openError) {
+                        outputChannel.appendLine(`Error opening URL ${mrUrl}: ${openError}`);
+                        // Show original success message if opening fails
+                        vscode.window.showInformationMessage(`Successfully pushed ${currentBranch} and initiated Merge Request creation targeting ${targetBranch}. Failed to open URL.`);
+                    }
+                } else {
+                    outputChannel.appendLine('Could not find MR URL in push output.');
+                    // Show original success message if URL not found
+                    vscode.window.showInformationMessage(`Successfully pushed ${currentBranch} and initiated Merge Request creation targeting ${targetBranch}. Could not find URL to open.`);
+                }
+
+                // --- Step 9: Switch back to target branch locally ---
                 outputChannel.appendLine(`Attempting to switch local branch to ${targetBranch}...`);
                 try {
                     const checkoutResult = await runGitCommand(['checkout', targetBranch], workspaceRoot, `checkout ${targetBranch}`);
