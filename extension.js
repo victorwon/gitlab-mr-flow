@@ -308,7 +308,8 @@ async function activate(context) { // Restored async
                 'origin',
                 currentBranch, // Push the current branch
                 '-o', `merge_request.create`,
-                '-o', `merge_request.target=${targetBranch}`
+                '-o', `merge_request.target=${targetBranch}`,
+                '-o', `merge_request.remove_source_branch=false` // Add option to keep source branch
             ];
             const pushResult = await runGitCommand(pushArgs, workspaceRoot, 'push and create merge request');
 
@@ -316,6 +317,25 @@ async function activate(context) { // Restored async
                 outputChannel.appendLine('Push and MR creation command successful.');
                 // Check stdout/stderr for GitLab's confirmation message if needed, but a success code is usually enough
                 vscode.window.showInformationMessage(`Successfully pushed ${currentBranch} and initiated Merge Request creation targeting ${targetBranch}.`);
+
+                // --- Step 8: Switch back to target branch locally ---
+                outputChannel.appendLine(`Attempting to switch local branch to ${targetBranch}...`);
+                try {
+                    const checkoutResult = await runGitCommand(['checkout', targetBranch], workspaceRoot, `checkout ${targetBranch}`);
+                    if (checkoutResult.exitCode === 0) {
+                        outputChannel.appendLine(`Successfully switched local branch to ${targetBranch}.`);
+                        vscode.window.showInformationMessage(`Switched local branch to ${targetBranch}.`);
+                    } else {
+                        outputChannel.appendLine(`Failed to switch local branch to ${targetBranch}. Exit code: ${checkoutResult.exitCode}`);
+                        // Show a warning, but don't treat it as a fatal error for the overall MR flow
+                        vscode.window.showWarningMessage(`Merge request created, but failed to switch local branch back to ${targetBranch}. Check Output channel.`);
+                    }
+                } catch (checkoutError) {
+                    // Catch errors specifically from the checkout command
+                    outputChannel.appendLine(`Error during checkout to ${targetBranch}: ${checkoutError.message}`);
+                    vscode.window.showWarningMessage(`Merge request created, but encountered an error switching local branch back to ${targetBranch}. Check Output channel.`);
+                }
+
             } else {
                 outputChannel.appendLine(`Push and MR creation command failed. Exit code: ${pushResult.exitCode}`);
                 vscode.window.showErrorMessage(`Failed to push or create Merge Request. Exit Code: ${pushResult.exitCode}. Check Output channel for details.`);
