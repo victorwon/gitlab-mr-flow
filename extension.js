@@ -335,12 +335,25 @@ async function activate(context) { // Restored async
                         vscode.window.showInformationMessage(`Successfully pushed ${currentBranch} and initiated Merge Request creation targeting ${targetBranch}. Failed to open URL.`);
                     }
                 } else {
-                    outputChannel.appendLine('Could not find MR URL in push output.');
-                    // Show original success message if URL not found
-                    vscode.window.showInformationMessage(`Successfully pushed ${currentBranch} and initiated Merge Request creation targeting ${targetBranch}. Could not find URL to open.`);
+                    outputChannel.appendLine('Could not find MR URL in push output. Attempting to construct MR URL from origin...');
+                    try {
+                        const originUrl = await getOriginUrl(workspaceRoot); // Reuse existing function
+                        const baseUrl = originUrl.endsWith('.git') ? originUrl.slice(0, -4) : originUrl; // Remove .git if present
+                        const constructedMrUrl = `${baseUrl}/-/merge_requests`;
+
+                        outputChannel.appendLine(`Constructed MR URL: ${constructedMrUrl}`);
+                        await vscode.env.openExternal(vscode.Uri.parse(constructedMrUrl));
+                        vscode.window.showInformationMessage(`Successfully pushed ${currentBranch} and navigated to Merge Requests page in your browser. Local branch remains ${currentBranch}.`);
+
+                    } catch (constructError) {
+                        outputChannel.appendLine(`Error constructing or opening MR URL: ${constructError.message}`);
+                        vscode.window.showErrorMessage(`Push successful, but could not confirm Merge Request creation or open MR page. Please check GitLab manually. Local branch remains ${currentBranch}.`);
+                    }
+                    return; // Stop execution here, do not switch branch
                 }
 
                 // --- Step 9: Switch back to target branch locally ---
+                // This code will only be reached if the MR URL was found and opened (or failed to open)
                 outputChannel.appendLine(`Attempting to switch local branch to ${targetBranch}...`);
                 try {
                     const checkoutResult = await runGitCommand(['checkout', targetBranch], workspaceRoot, `checkout ${targetBranch}`);
