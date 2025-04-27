@@ -3,6 +3,7 @@
 
 - Create Merge Requests directly from VS Code.
 - Uses git CLI, no API tokens needed.
+- Supports multi-root workspace.
 
 ## Usage
 

@@ -366,7 +366,8 @@ async function activate(context) { // Restored async
                     currentBranch, // Push the current branch
                     '-o', `merge_request.create`,
                     '-o', `merge_request.target=${targetBranch}`,
-                    '-o', `merge_request.remove_source_branch=false` // Add option to keep source branch
+                    '-o', `merge_request.remove_source_branch=false`, // Add option to keep source branch
+                    '-o', `merge_request.title=${currentBranch}` // Use feature branch name as MR name
                 ];
                 const pushResult = await runGitCommand(pushArgs, workspaceRoot, 'push and create merge request');
 
