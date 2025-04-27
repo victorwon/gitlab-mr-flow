@@ -1,8 +1,10 @@
 {
   "name": "gitlab-mr-flow",
   "displayName": "GitLab MR Flow",
+  "publisher": "VictorWeng",
   "description": "Integrated workflow with GitLab Merge Request via git cli without using API tokens.",
   "version": "1.0.0",
+  "icon": "images/logo.png",
   "engines": {
     "vscode": "^1.96.0"
   },
