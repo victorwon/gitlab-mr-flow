@@ -226,19 +226,40 @@ async function activate(context) { // Restored async
     // The command has been defined in the package.json file
     // Now provide the implementation of the command with registerCommand
     // The commandId parameter must match the command field in package.json
-    let disposable = vscode.commands.registerCommand('gitlab-mr-flow.createMergeRequest', async function () {
+    let disposable = vscode.commands.registerCommand('gitlab-mr-flow.createMergeRequest', async function (repository) {
         // The code you place here will be executed every time your command is executed
-        outputChannel.appendLine('Command "gitlab-mr-flow.createMergeRequest" triggered.');
+        outputChannel.appendLine(`Command "gitlab-mr-flow.createMergeRequest" triggered ${repository.rootUri}.`);
         vscode.window.showInformationMessage('Starting GitLab MR Flow...'); // Placeholder
 
         // --- Step 1: Get Workspace Root & Check for .git ---
-        const workspaceFolders = vscode.workspace.workspaceFolders;
-        if (!workspaceFolders || workspaceFolders.length === 0) {
-            vscode.window.showErrorMessage('No workspace folder open.');
-            outputChannel.appendLine('Error: No workspace folder open.');
-            return;
+        let workspaceRoot = '';
+        if (repository && repository.rootUri) {
+            workspaceRoot = repository.rootUri.fsPath;
+            outputChannel.appendLine(`Workspace folder provided: ${workspaceRoot}`);
+        } else {
+            if (vscode.window.activeTextEditor) {
+                let activeFile = vscode.window.activeTextEditor.document.uri.fsPath;
+                outputChannel.appendLine(`Active file: ${activeFile}`);
+
+                let dir = path.dirname(activeFile);
+                while (dir !== path.dirname(dir)) { // Prevent infinite loop
+                    try {
+                        await fs.access(path.join(dir, '.git'));
+                        workspaceRoot = dir;
+                        outputChannel.appendLine(`Found Git root: ${workspaceRoot}`);
+                        break;
+                    } catch (err) {
+                        dir = path.dirname(dir);
+                    }
+                }
+            }
+
+            if (!workspaceRoot) {
+                vscode.window.showErrorMessage('No Git repository found.');
+                outputChannel.appendLine('Error: No Git repository found.');
+                return;
+            }
         }
-        const workspaceRoot = workspaceFolders[0].uri.fsPath;
         outputChannel.appendLine(`Workspace root: ${workspaceRoot}`);
 
         // --- Step 0: Check current branch name ---
