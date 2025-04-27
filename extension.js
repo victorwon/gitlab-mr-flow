@@ -391,14 +391,7 @@ async function activate(context) { // Restored async
         }
     });
 
-    // Register the test command - REMOVED
-    // let helloWorldDisposable = vscode.commands.registerCommand('gitlab-mr-flow.helloWorld', () => {
-    //     vscode.window.showInformationMessage('Hello World from GitLab MR Flow!');
-    //     outputChannel.appendLine('Command "gitlab-mr-flow.helloWorld" triggered.');
-    // });
-
     context.subscriptions.push(disposable); // Push the original command
-    // context.subscriptions.push(helloWorldDisposable); // REMOVED
     context.subscriptions.push(outputChannel); // Add channel to subscriptions for disposal
     outputChannel.appendLine('GitLab MR Flow extension activated successfully.'); // Restored original message
 }
