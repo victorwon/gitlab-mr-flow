@@ -34,8 +34,7 @@
       {
         "command": "gitlab-mr-flow.createMergeRequest",
         "key": "cmd+g m",
-        "mac": "cmd+g m",
-        "when": "editorTextFocus"
+        "mac": "cmd+g m"
       }
     ]
   },
