@@ -41,13 +41,13 @@ async function runGitCommand(args, cwd, commandDesc) {
 }
 
 /**
- * Reads .git/config and returns the URL for the 'origin' remote.
- * Prompts the user if multiple origin URLs are found.
+ * Reads .git/config and returns the URL and name for a remote.
+ * Prompts the user if multiple remotes are found.
  * @param {string} workspaceRoot - The root path of the workspace.
- * @returns {Promise<string>} The selected origin URL.
- * @throws {Error} If no origin URL is found, config is unreadable, or user cancels selection.
+ * @returns {Promise<{remoteName: string, remoteUrl: string}>} The selected remote's name and URL.
+ * @throws {Error} If no remote URL is found, config is unreadable, or user cancels selection.
  */
-async function getOriginUrl(workspaceRoot) {
+async function getOrigin(workspaceRoot) {
     const configPath = path.join(workspaceRoot, '.git', 'config');
     outputChannel.appendLine(`Reading git config: ${configPath}`);
     let configContent;
@@ -58,38 +58,67 @@ async function getOriginUrl(workspaceRoot) {
         throw new Error('Could not read .git/config file.');
     }
 
-    const originUrls = [];
+    const originRemotes = [];
     // Regex to find remote "origin" sections and their url
     const remoteOriginRegex = /\[remote\s+"origin"\][^\[]*?url\s*=\s*([^\s#]+)/g;
     let match;
     while ((match = remoteOriginRegex.exec(configContent)) !== null) {
-        originUrls.push(match[1]);
+        originRemotes.push({ remoteName: 'origin', remoteUrl: match[1] });
     }
 
-    if (originUrls.length === 0) {
-        outputChannel.appendLine('No remote "origin" URL found in .git/config.');
-        throw new Error('No remote "origin" URL found in .git/config.');
+    if (originRemotes.length === 0) {
+        outputChannel.appendLine('No remote "origin" URL found in .git/config. Trying to use any remote...');
+        // Try to find any remote URL
+        const remoteRegex = /\[remote\s+"(\S+)"\][^\[]*?url\s*=\s*([^\s#]+)/g;
+        let remoteMatch;
+        const allRemotes = [];
+        while ((remoteMatch = remoteRegex.exec(configContent)) !== null) {
+            allRemotes.push({ remoteName: remoteMatch[1], remoteUrl: remoteMatch[2] });
+        }
+
+        if (allRemotes.length === 0) {
+            outputChannel.appendLine('No remote URLs found in .git/config.');
+            throw new Error('No remote URLs found in .git/config.');
+        } else if (allRemotes.length === 1) {
+            outputChannel.appendLine(`Found single remote URL: ${allRemotes[0].remoteUrl}`);
+            return allRemotes[0];
+        } else {
+            // Multiple remotes found, prompt user
+            outputChannel.appendLine(`Multiple remote URLs found: ${allRemotes.map(r => r.remoteName + ': ' + r.remoteUrl).join(', ')}`);
+            const selectedRemote = await vscode.window.showQuickPick(allRemotes.map(r => ({ label: r.remoteName, description: r.remoteUrl })), {
+                placeHolder: 'Multiple remotes found. Please select the one to use.',
+                ignoreFocusOut: true // Keep open even if focus moves
+            });
+
+            if (!selectedRemote) {
+                outputChannel.appendLine('User cancelled remote selection.');
+                throw new Error('Remote selection cancelled by user.');
+            }
+
+            const selected = allRemotes.find(r => r.remoteName === selectedRemote.label);
+            outputChannel.appendLine(`User selected remote URL: ${selected.remoteUrl}`);
+            return selected;
+        }
+    } else if (originRemotes.length === 1) {
+        outputChannel.appendLine(`Found single origin URL: ${originRemotes[0].remoteUrl}`);
+        return originRemotes[0];
+    } else {
+        // Multiple origins found, prompt user
+        outputChannel.appendLine(`Multiple origin URLs found: ${originRemotes.map(r => r.remoteName + ': ' + r.remoteUrl).join(', ')}`);
+        const selectedRemote = await vscode.window.showQuickPick(originRemotes.map(r => ({ label: r.remoteName, description: r.remoteUrl })), {
+            placeHolder: 'Multiple "origin" remotes found. Please select the one to use.',
+            ignoreFocusOut: true // Keep open even if focus moves
+        });
+
+        if (!selectedRemote) {
+            outputChannel.appendLine('User cancelled origin selection.');
+            throw new Error('Origin selection cancelled by user.');
+        }
+
+        const selected = originRemotes.find(r => r.remoteName === selectedRemote.label);
+        outputChannel.appendLine(`User selected origin URL: ${selected.remoteUrl}`);
+        return selected;
     }
-
-    if (originUrls.length === 1) {
-        outputChannel.appendLine(`Found single origin URL: ${originUrls[0]}`);
-        return originUrls[0];
-    }
-
-    // Multiple origins found, prompt user
-    outputChannel.appendLine(`Multiple origin URLs found: ${originUrls.join(', ')}`);
-    const selectedUrl = await vscode.window.showQuickPick(originUrls, {
-        placeHolder: 'Multiple "origin" remotes found. Please select the one to use.',
-        ignoreFocusOut: true // Keep open even if focus moves
-    });
-
-    if (!selectedUrl) {
-        outputChannel.appendLine('User cancelled origin selection.');
-        throw new Error('Origin selection cancelled by user.');
-    }
-
-    outputChannel.appendLine(`User selected origin URL: ${selectedUrl}`);
-    return selectedUrl;
 }
 
 /**
@@ -100,12 +129,12 @@ async function getOriginUrl(workspaceRoot) {
  * @returns {Promise<string>} The selected target branch name.
  * @throws {Error} If the target branch cannot be determined or user cancels selection.
  */
-async function getTargetBranch(workspaceRoot) {
+async function getTargetBranch(workspaceRoot, remoteName) {
     outputChannel.appendLine('Determining target branch...');
 
-    // Attempt 1: Use 'git remote show origin'
+    // Attempt 1: Use 'git remote show'
     try {
-        const remoteShowResult = await runGitCommand(['remote', 'show', 'origin'], workspaceRoot, 'show remote origin');
+        const remoteShowResult = await runGitCommand(['remote', 'show', remoteName], workspaceRoot, `show remote ${remoteName}`);
         if (remoteShowResult.exitCode === 0 && remoteShowResult.stdout) {
             const headBranchMatch = remoteShowResult.stdout.match(/HEAD branch:\s*(\S+)/);
             if (headBranchMatch && headBranchMatch[1]) {
@@ -115,17 +144,17 @@ async function getTargetBranch(workspaceRoot) {
                     outputChannel.appendLine(`Found default remote branch via 'remote show': ${defaultBranch}`);
                     return defaultBranch;
                 } else {
-                     outputChannel.appendLine(`'git remote show origin' reported HEAD branch as '(unknown)'.`);
+                     outputChannel.appendLine(`'git remote show ${remoteName}' reported HEAD branch as '(unknown)'.`);
                 }
             } else {
-                 outputChannel.appendLine(`Could not parse HEAD branch from 'git remote show origin' output.`);
+                 outputChannel.appendLine(`Could not parse HEAD branch from 'git remote show ${remoteName}' output.`);
             }
         } else {
-             outputChannel.appendLine(`'git remote show origin' failed or produced no output. Exit code: ${remoteShowResult.exitCode}`);
+             outputChannel.appendLine(`'git remote show ${remoteName}' failed or produced no output. Exit code: ${remoteShowResult.exitCode}`);
         }
     } catch (error) {
         // Log error from runGitCommand but continue to fallback
-        outputChannel.appendLine(`Error running 'git remote show origin': ${error.message}. Falling back to 'git branch -r'.`);
+        outputChannel.appendLine(`Error running 'git remote show ${remoteName}': ${error.message}. Falling back to 'git branch -r'.`);
     }
 
     // Attempt 2: Fallback to 'git branch -r' and prompt user
@@ -281,11 +310,11 @@ async function activate(context) { // Restored async
                 }
 
                 // --- Step 3: Remote Origin Identification ---
-                const originUrl = await getOriginUrl(workspaceRoot);
-                outputChannel.appendLine(`Using origin URL: ${originUrl}`); // Note: originUrl isn't directly used by git commands here, but good to have logged.
+                const origin = await getOrigin(workspaceRoot);
+                outputChannel.appendLine(`Using origin URL: ${origin.remoteUrl}`); // Note: originUrl isn't directly used by git commands here, but good to have logged.
 
                 // --- Step 4: Target Branch Determination ---
-                const targetBranch = await getTargetBranch(workspaceRoot);
+                const targetBranch = await getTargetBranch(workspaceRoot, origin.remoteName);
                 outputChannel.appendLine(`Target branch set to: ${targetBranch}`);
 
                 // --- Step 5: Current Branch Identification ---
@@ -293,8 +322,8 @@ async function activate(context) { // Restored async
                 outputChannel.appendLine(`Current branch identified as: ${currentBranch}`);
 
                 // --- Step 6: Fetch and Merge Remote Changes ---
-                outputChannel.appendLine(`Fetching updates from origin...`);
-                const fetchResult = await runGitCommand(['fetch', 'origin'], workspaceRoot, 'fetch origin');
+                outputChannel.appendLine(`Fetching updates from ${origin.remoteName}...`);
+                const fetchResult = await runGitCommand(['fetch', origin.remoteName], workspaceRoot, `fetch ${origin.remoteName}`);
                 if (fetchResult.exitCode !== 0) {
                     outputChannel.appendLine(`Git fetch failed with exit code ${fetchResult.exitCode}.`);
                     vscode.window.showErrorMessage(`Git fetch from origin failed. Check Output channel for details.`);
@@ -302,10 +331,10 @@ async function activate(context) { // Restored async
                 }
                 outputChannel.appendLine('Fetch successful.');
 
-                outputChannel.appendLine(`Attempting to merge origin/${targetBranch} into ${currentBranch}...`);
+                outputChannel.appendLine(`Attempting to merge ${origin.remoteName}/${targetBranch} into ${currentBranch}...`);
                 // Use --no-commit --no-ff to allow inspection/resolution before commit, though git push handles the MR creation.
                 // Standard merge is likely fine here as the push command handles the MR options. Let's stick to a standard merge.
-                const mergeResult = await runGitCommand(['merge', `origin/${targetBranch}`], workspaceRoot, `merge origin/${targetBranch}`);
+                const mergeResult = await runGitCommand(['merge', `${origin.remoteName}/${targetBranch}`], workspaceRoot, `merge ${origin.remoteName}/${targetBranch}`);
 
                 // Check for conflicts or other errors during merge
                 if (mergeResult.exitCode !== 0) {
@@ -323,17 +352,17 @@ async function activate(context) { // Restored async
                     }
                     else {
                         outputChannel.appendLine(`Git merge failed with exit code ${mergeResult.exitCode}.`);
-                        vscode.window.showErrorMessage(`Git merge of origin/${targetBranch} failed. Check Output channel for details.`);
+                        vscode.window.showErrorMessage(`Git merge of ${origin.remoteName}/${targetBranch} failed. Check Output channel for details.`);
                         return; // Stop execution
                     }
                 }
                 outputChannel.appendLine('Merge successful.');
 
                 // --- Step 7: Push and Create Merge Request ---
-                outputChannel.appendLine(`Attempting to push ${currentBranch} to origin and create MR targeting ${targetBranch}...`);
+                outputChannel.appendLine(`Attempting to push ${currentBranch} to ${origin.remoteName} and create MR targeting ${targetBranch}...`);
                 const pushArgs = [
                     'push',
-                    'origin',
+                    origin.remoteName,
                     currentBranch, // Push the current branch
                     '-o', `merge_request.create`,
                     '-o', `merge_request.target=${targetBranch}`,
@@ -365,8 +394,8 @@ async function activate(context) { // Restored async
                     } else {
                         outputChannel.appendLine('Could not find MR URL in push output. Attempting to construct MR URL from origin...');
                         try {
-                            const originUrl = await getOriginUrl(workspaceRoot); // Reuse existing function
-                            const baseUrl = originUrl.endsWith('.git') ? originUrl.slice(0, -4) : originUrl; // Remove .git if present
+                            const origin = await getOrigin(workspaceRoot); // Reuse existing function
+                            const baseUrl = origin.remoteUrl.endsWith('.git') ? origin.remoteUrl.slice(0, -4) : origin.remoteUrl; // Remove .git if present
                             const constructedMrUrl = `${baseUrl}/-/merge_requests`;
 
                             outputChannel.appendLine(`Constructed MR URL: ${constructedMrUrl}`);
