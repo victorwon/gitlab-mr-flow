@@ -60,7 +60,6 @@ async function getOriginUrl(workspaceRoot) {
 
     const originUrls = [];
     // Regex to find remote "origin" sections and their url
-    // Handles potential variations in spacing and comments
     const remoteOriginRegex = /\[remote\s+"origin"\][^\[]*?url\s*=\s*([^\s#]+)/g;
     let match;
     while ((match = remoteOriginRegex.exec(configContent)) !== null) {
@@ -232,154 +231,163 @@ async function activate(context) { // Restored async
         outputChannel.appendLine('Command "gitlab-mr-flow.createMergeRequest" triggered.');
         vscode.window.showInformationMessage('Starting GitLab MR Flow...'); // Placeholder
 
-        try {
-            // --- Step 1: Get Workspace Root & Check for .git ---
-            const workspaceFolders = vscode.workspace.workspaceFolders;
-            if (!workspaceFolders || workspaceFolders.length === 0) {
-                vscode.window.showErrorMessage('No workspace folder open.');
-                outputChannel.appendLine('Error: No workspace folder open.');
-                return;
-            }
-            const workspaceRoot = workspaceFolders[0].uri.fsPath;
-            outputChannel.appendLine(`Workspace root: ${workspaceRoot}`);
+        // --- Step 1: Get Workspace Root & Check for .git ---
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (!workspaceFolders || workspaceFolders.length === 0) {
+            vscode.window.showErrorMessage('No workspace folder open.');
+            outputChannel.appendLine('Error: No workspace folder open.');
+            return;
+        }
+        const workspaceRoot = workspaceFolders[0].uri.fsPath;
+        outputChannel.appendLine(`Workspace root: ${workspaceRoot}`);
 
+        // --- Step 0: Check current branch name ---
+        const currentBranch = await getCurrentBranch(workspaceRoot);
+        if (!currentBranch.startsWith('feat')) {
+            vscode.window.showErrorMessage('Merge Requests can only be created from feature branches with the "feat" prefix. e.g. feature/abc');
+            outputChannel.appendLine(`Error: Current branch "${currentBranch}" does not start with "feat".`);
+            return; // Stop execution
+        } else {
             try {
-                await fs.access(path.join(workspaceRoot, '.git'));
-                outputChannel.appendLine('Found .git directory.');
-            } catch (error) {
-                vscode.window.showErrorMessage('Current workspace is not a Git repository.');
-                outputChannel.appendLine('Error: .git directory not found.');
-                return;
-            }
-
-            // --- Step 3: Remote Origin Identification ---
-            const originUrl = await getOriginUrl(workspaceRoot);
-            outputChannel.appendLine(`Using origin URL: ${originUrl}`); // Note: originUrl isn't directly used by git commands here, but good to have logged.
-
-            // --- Step 4: Target Branch Determination ---
-            const targetBranch = await getTargetBranch(workspaceRoot);
-            outputChannel.appendLine(`Target branch set to: ${targetBranch}`);
-
-            // --- Step 5: Current Branch Identification ---
-            const currentBranch = await getCurrentBranch(workspaceRoot);
-            outputChannel.appendLine(`Current branch identified as: ${currentBranch}`);
-
-            // --- Step 6: Fetch and Merge Remote Changes ---
-            outputChannel.appendLine(`Fetching updates from origin...`);
-            const fetchResult = await runGitCommand(['fetch', 'origin'], workspaceRoot, 'fetch origin');
-            if (fetchResult.exitCode !== 0) {
-                outputChannel.appendLine(`Git fetch failed with exit code ${fetchResult.exitCode}.`);
-                vscode.window.showErrorMessage(`Git fetch from origin failed. Check Output channel for details.`);
-                return; // Stop execution
-            }
-            outputChannel.appendLine('Fetch successful.');
-
-            outputChannel.appendLine(`Attempting to merge origin/${targetBranch} into ${currentBranch}...`);
-            // Use --no-commit --no-ff to allow inspection/resolution before commit, though git push handles the MR creation.
-            // Standard merge is likely fine here as the push command handles the MR options. Let's stick to a standard merge.
-            const mergeResult = await runGitCommand(['merge', `origin/${targetBranch}`], workspaceRoot, `merge origin/${targetBranch}`);
-
-            // Check for conflicts or other errors during merge
-            if (mergeResult.exitCode !== 0) {
-                const errorOutput = mergeResult.stderr || mergeResult.stdout || ''; // Combine outputs for checking
-                // Check specifically for merge conflict indicators
-                if (errorOutput.includes('Merge conflict') || errorOutput.includes('Automatic merge failed; fix conflicts and then commit the result.')) {
-                    outputChannel.appendLine('Merge conflict detected.');
-                    vscode.window.showErrorMessage('Merge conflicts detected. Please resolve them manually (e.g., using VS Code\'s Source Control view), commit the merge, and then run the command again.');
-                    return; // Stop execution
-                } else if (errorOutput.includes('fatal: Need to specify how to reconcile divergent branches.')) {
-                    // This specific error shouldn't happen with fetch + merge, but handle defensively
-                    outputChannel.appendLine('Error: Divergent branches detected during merge attempt.');
-                    vscode.window.showErrorMessage('Error: Divergent branches. This shouldn\'t happen with fetch+merge. Check Git status and Output channel.');
-                    return; // Stop execution
-                }
-                else {
-                    outputChannel.appendLine(`Git merge failed with exit code ${mergeResult.exitCode}.`);
-                    vscode.window.showErrorMessage(`Git merge of origin/${targetBranch} failed. Check Output channel for details.`);
-                    return; // Stop execution
-                }
-            }
-            outputChannel.appendLine('Merge successful.');
-
-            // --- Step 7: Push and Create Merge Request ---
-            outputChannel.appendLine(`Attempting to push ${currentBranch} to origin and create MR targeting ${targetBranch}...`);
-            const pushArgs = [
-                'push',
-                'origin',
-                currentBranch, // Push the current branch
-                '-o', `merge_request.create`,
-                '-o', `merge_request.target=${targetBranch}`,
-                '-o', `merge_request.remove_source_branch=false` // Add option to keep source branch
-            ];
-            const pushResult = await runGitCommand(pushArgs, workspaceRoot, 'push and create merge request');
-
-            if (pushResult.exitCode === 0) {
-                outputChannel.appendLine('Push and MR creation command successful.');
-
-                // --- Step 8: Parse MR URL and Open in Browser ---
-                let mrUrl = null;
-                const output = `${pushResult.stdout}\n${pushResult.stderr}`; // Combine stdout and stderr
-                const urlRegex = /remote:\s+(https?:\/\/[^\s]+)/i;
-                const match = output.match(urlRegex);
-
-                if (match && match[1]) {
-                    mrUrl = match[1];
-                    outputChannel.appendLine(`Found MR URL: ${mrUrl}`);
-                    try {
-                        await vscode.env.openExternal(vscode.Uri.parse(mrUrl));
-                        outputChannel.appendLine(`Opened MR URL in browser.`);
-                        vscode.window.showInformationMessage(`Successfully created Merge Request targeting ${targetBranch} and opened it in your browser.`);
-                    } catch (openError) {
-                        outputChannel.appendLine(`Error opening URL ${mrUrl}: ${openError}`);
-                        // Show original success message if opening fails
-                        vscode.window.showInformationMessage(`Successfully pushed ${currentBranch} and initiated Merge Request creation targeting ${targetBranch}. Failed to open URL.`);
-                    }
-                } else {
-                    outputChannel.appendLine('Could not find MR URL in push output. Attempting to construct MR URL from origin...');
-                    try {
-                        const originUrl = await getOriginUrl(workspaceRoot); // Reuse existing function
-                        const baseUrl = originUrl.endsWith('.git') ? originUrl.slice(0, -4) : originUrl; // Remove .git if present
-                        const constructedMrUrl = `${baseUrl}/-/merge_requests`;
-
-                        outputChannel.appendLine(`Constructed MR URL: ${constructedMrUrl}`);
-                        await vscode.env.openExternal(vscode.Uri.parse(constructedMrUrl));
-                        vscode.window.showInformationMessage(`Successfully pushed ${currentBranch} and navigated to Merge Requests page in your browser. Local branch remains ${currentBranch}.`);
-
-                    } catch (constructError) {
-                        outputChannel.appendLine(`Error constructing or opening MR URL: ${constructError.message}`);
-                        vscode.window.showErrorMessage(`Push successful, but could not confirm Merge Request creation or open MR page. Please check GitLab manually. Local branch remains ${currentBranch}.`);
-                    }
-                    return; // Stop execution here, do not switch branch
-                }
-
-                // --- Step 9: Switch back to target branch locally ---
-                // This code will only be reached if the MR URL was found and opened (or failed to open)
-                outputChannel.appendLine(`Attempting to switch local branch to ${targetBranch}...`);
+                // --- Step 2: Check for .git directory ---
                 try {
-                    const checkoutResult = await runGitCommand(['checkout', targetBranch], workspaceRoot, `checkout ${targetBranch}`);
-                    if (checkoutResult.exitCode === 0) {
-                        outputChannel.appendLine(`Successfully switched local branch to ${targetBranch}.`);
-                        vscode.window.showInformationMessage(`Switched local branch to ${targetBranch}.`);
-                    } else {
-                        outputChannel.appendLine(`Failed to switch local branch to ${targetBranch}. Exit code: ${checkoutResult.exitCode}`);
-                        // Show a warning, but don't treat it as a fatal error for the overall MR flow
-                        vscode.window.showWarningMessage(`Merge request created, but failed to switch local branch back to ${targetBranch}. Check Output channel.`);
-                    }
-                } catch (checkoutError) {
-                    // Catch errors specifically from the checkout command
-                    outputChannel.appendLine(`Error during checkout to ${targetBranch}: ${checkoutError.message}`);
-                    vscode.window.showWarningMessage(`Merge request created, but encountered an error switching local branch back to ${targetBranch}. Check Output channel.`);
+                    await fs.access(path.join(workspaceRoot, '.git'));
+                    outputChannel.appendLine('Found .git directory.');
+                } catch (error) {
+                    vscode.window.showErrorMessage('Current workspace is not a Git repository.');
+                    outputChannel.appendLine('Error: .git directory not found.');
+                    return;
                 }
 
-            } else {
-                outputChannel.appendLine(`Push and MR creation command failed. Exit code: ${pushResult.exitCode}`);
-                vscode.window.showErrorMessage(`Failed to push or create Merge Request. Exit Code: ${pushResult.exitCode}. Check Output channel for details.`);
-                // No return here, let the function finish
-            }
+                // --- Step 3: Remote Origin Identification ---
+                const originUrl = await getOriginUrl(workspaceRoot);
+                outputChannel.appendLine(`Using origin URL: ${originUrl}`); // Note: originUrl isn't directly used by git commands here, but good to have logged.
 
-        } catch (error) {
-            outputChannel.appendLine(`Unhandled error: ${error.message || error}`);
-            vscode.window.showErrorMessage(`GitLab MR Flow failed: ${error.message || 'Unknown error'}. Check Output channel.`);
+                // --- Step 4: Target Branch Determination ---
+                const targetBranch = await getTargetBranch(workspaceRoot);
+                outputChannel.appendLine(`Target branch set to: ${targetBranch}`);
+
+                // --- Step 5: Current Branch Identification ---
+                // const currentBranch = await getCurrentBranch(workspaceRoot); // Already got it above
+                outputChannel.appendLine(`Current branch identified as: ${currentBranch}`);
+
+                // --- Step 6: Fetch and Merge Remote Changes ---
+                outputChannel.appendLine(`Fetching updates from origin...`);
+                const fetchResult = await runGitCommand(['fetch', 'origin'], workspaceRoot, 'fetch origin');
+                if (fetchResult.exitCode !== 0) {
+                    outputChannel.appendLine(`Git fetch failed with exit code ${fetchResult.exitCode}.`);
+                    vscode.window.showErrorMessage(`Git fetch from origin failed. Check Output channel for details.`);
+                    return; // Stop execution
+                }
+                outputChannel.appendLine('Fetch successful.');
+
+                outputChannel.appendLine(`Attempting to merge origin/${targetBranch} into ${currentBranch}...`);
+                // Use --no-commit --no-ff to allow inspection/resolution before commit, though git push handles the MR creation.
+                // Standard merge is likely fine here as the push command handles the MR options. Let's stick to a standard merge.
+                const mergeResult = await runGitCommand(['merge', `origin/${targetBranch}`], workspaceRoot, `merge origin/${targetBranch}`);
+
+                // Check for conflicts or other errors during merge
+                if (mergeResult.exitCode !== 0) {
+                    const errorOutput = mergeResult.stderr || mergeResult.stdout || ''; // Combine outputs for checking
+                    // Check specifically for merge conflict indicators
+                    if (errorOutput.includes('Merge conflict') || errorOutput.includes('Automatic merge failed; fix conflicts and then commit the result.')) {
+                        outputChannel.appendLine('Merge conflict detected.');
+                        vscode.window.showErrorMessage('Merge conflicts detected. Please resolve them manually (e.g., using VS Code\'s Source Control view), commit the merge, and then run the command again.');
+                        return; // Stop execution
+                    } else if (errorOutput.includes('fatal: Need to specify how to reconcile divergent branches.')) {
+                        // This specific error shouldn't happen with fetch + merge, but handle defensively
+                        outputChannel.appendLine('Error: Divergent branches detected during merge attempt.');
+                        vscode.window.showErrorMessage(`Error: Divergent branches. This shouldn't happen with fetch+merge. Check Git status and Output channel.`);
+                        return; // Stop execution
+                    }
+                    else {
+                        outputChannel.appendLine(`Git merge failed with exit code ${mergeResult.exitCode}.`);
+                        vscode.window.showErrorMessage(`Git merge of origin/${targetBranch} failed. Check Output channel for details.`);
+                        return; // Stop execution
+                    }
+                }
+                outputChannel.appendLine('Merge successful.');
+
+                // --- Step 7: Push and Create Merge Request ---
+                outputChannel.appendLine(`Attempting to push ${currentBranch} to origin and create MR targeting ${targetBranch}...`);
+                const pushArgs = [
+                    'push',
+                    'origin',
+                    currentBranch, // Push the current branch
+                    '-o', `merge_request.create`,
+                    '-o', `merge_request.target=${targetBranch}`,
+                    '-o', `merge_request.remove_source_branch=false` // Add option to keep source branch
+                ];
+                const pushResult = await runGitCommand(pushArgs, workspaceRoot, 'push and create merge request');
+
+                if (pushResult.exitCode === 0) {
+                    outputChannel.appendLine('Push and MR creation command successful.');
+
+                    // --- Step 8: Parse MR URL and Open in Browser ---
+                    let mrUrl = null;
+                    const output = `${pushResult.stdout}\n${pushResult.stderr}`; // Combine stdout and stderr
+                    const urlRegex = /remote:\s+(https?:\/\/[^\s]+)/i;
+                    const match = output.match(urlRegex);
+
+                    if (match && match[1]) {
+                        mrUrl = match[1];
+                        outputChannel.appendLine(`Found MR URL: ${mrUrl}`);
+                        try {
+                            await vscode.env.openExternal(vscode.Uri.parse(mrUrl));
+                            outputChannel.appendLine(`Opened MR URL in browser.`);
+                            vscode.window.showInformationMessage(`Successfully created Merge Request targeting ${targetBranch} and opened it in your browser.`);
+                        } catch (openError) {
+                            outputChannel.appendLine(`Error opening URL ${mrUrl}: ${openError}`);
+                            // Show original success message if opening fails
+                            vscode.window.showInformationMessage(`Successfully pushed ${currentBranch} and initiated Merge Request creation targeting ${targetBranch}. Failed to open URL.`);
+                        }
+                    } else {
+                        outputChannel.appendLine('Could not find MR URL in push output. Attempting to construct MR URL from origin...');
+                        try {
+                            const originUrl = await getOriginUrl(workspaceRoot); // Reuse existing function
+                            const baseUrl = originUrl.endsWith('.git') ? originUrl.slice(0, -4) : originUrl; // Remove .git if present
+                            const constructedMrUrl = `${baseUrl}/-/merge_requests`;
+
+                            outputChannel.appendLine(`Constructed MR URL: ${constructedMrUrl}`);
+                            await vscode.env.openExternal(vscode.Uri.parse(constructedMrUrl));
+                            vscode.window.showInformationMessage(`Successfully pushed ${currentBranch} and navigated to Merge Requests page in your browser. Local branch remains ${currentBranch}.`);
+
+                        } catch (constructError) {
+                            outputChannel.appendLine(`Error constructing or opening MR URL: ${constructError.message}`);
+                            vscode.window.showErrorMessage(`Push successful, but could not confirm Merge Request creation or open MR page. Please check GitLab manually. Local branch remains ${currentBranch}.`);
+                        }
+                        return; // Stop execution here, do not switch branch
+                    }
+
+                    // --- Step 9: Switch back to target branch locally ---
+                    // This code will only be reached if the MR URL was found and opened (or failed to open)
+                    outputChannel.appendLine(`Attempting to switch local branch to ${targetBranch}...`);
+                    try {
+                        const checkoutResult = await runGitCommand(['checkout', targetBranch], workspaceRoot, `checkout ${targetBranch}`);
+                        if (checkoutResult.exitCode === 0) {
+                            outputChannel.appendLine(`Successfully switched local branch to ${targetBranch}.`);
+                            vscode.window.showInformationMessage(`Switched local branch to ${targetBranch}.`);
+                        } else {
+                            outputChannel.appendLine(`Failed to switch local branch to ${targetBranch}. Exit code: ${checkoutResult.exitCode}`);
+                            // Show a warning, but don't treat it as a fatal error for the overall MR flow
+                            vscode.window.showWarningMessage(`Merge request created, but failed to switch local branch back to ${targetBranch}. Check Output channel.`);
+                        }
+                    } catch (checkoutError) {
+                        // Catch errors specifically from the checkout command
+                        outputChannel.appendLine(`Error during checkout to ${targetBranch}: ${checkoutError.message}`);
+                        vscode.window.showWarningMessage(`Merge request created, but encountered an error switching local branch back to ${targetBranch}. Check Output channel.`);
+                    }
+
+                } else {
+                    outputChannel.appendLine(`Push and MR creation command failed. Exit code: ${pushResult.exitCode}`);
+                    vscode.window.showErrorMessage(`Failed to push or create Merge Request. Exit Code: ${pushResult.exitCode}. Check Output channel for details.`);
+                    // No return here, let the function finish
+                }
+
+            } catch (error) {
+                outputChannel.appendLine(`Unhandled error: ${error.message || error}`);
+                vscode.window.showErrorMessage(`GitLab MR Flow failed: ${error.message || 'Unknown error'}. Check Output channel.`);
+            }
         }
     });
 
