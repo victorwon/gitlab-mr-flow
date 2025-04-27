@@ -53,5 +53,6 @@
   },
   "dependencies": {
     "execa": "^9.5.2"
-  }
+  },
+  "repository": "https://github.com/victorwon/gitlab-mr-flow"
 }
