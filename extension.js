@@ -291,29 +291,42 @@ async function activate(context) { // Restored async
         }
         outputChannel.appendLine(`Workspace root: ${workspaceRoot}`);
 
-        // --- Step 0: Check current branch name ---
+        // --- Step 0: Get Git Info (Branch & Origin) ---
         const currentBranch = await getCurrentBranch(workspaceRoot);
+        const origin = await getOrigin(workspaceRoot); // Get origin early
+        outputChannel.appendLine(`Current branch: ${currentBranch}, Origin URL: ${origin.remoteUrl}`);
+
+        // --- Step 1: Handle non-feature branches ---
         if (!currentBranch.startsWith('feat')) {
-            vscode.window.showErrorMessage('Merge Requests can only be created from feature branches with the "feat" prefix. e.g. feature/abc');
-            outputChannel.appendLine(`Error: Current branch "${currentBranch}" does not start with "feat".`);
-            return; // Stop execution
-        } else {
+            outputChannel.appendLine(`Current branch "${currentBranch}" does not start with "feat". Opening MR list page.`);
             try {
-                // --- Step 2: Check for .git directory ---
-                try {
-                    await fs.access(path.join(workspaceRoot, '.git'));
-                    outputChannel.appendLine('Found .git directory.');
-                } catch (error) {
-                    vscode.window.showErrorMessage('Current workspace is not a Git repository.');
-                    outputChannel.appendLine('Error: .git directory not found.');
-                    return;
-                }
+                const baseUrl = origin.remoteUrl.endsWith('.git') ? origin.remoteUrl.slice(0, -4) : origin.remoteUrl; // Remove .git if present
+                const mrListPageUrl = `${baseUrl}/-/merge_requests`;
+                outputChannel.appendLine(`Constructed MR List URL: ${mrListPageUrl}`);
+                await vscode.env.openExternal(vscode.Uri.parse(mrListPageUrl));
+                vscode.window.showInformationMessage(`Currently not on a feature branch with a prefix of 'feat'. No merge action performed, just open the Merge Requests page.`);
+            } catch (openError) {
+                outputChannel.appendLine(`Error constructing or opening MR List URL: ${openError.message}`);
+                vscode.window.showErrorMessage(`Could not open the Merge Requests page for branch "${currentBranch}". Check Output channel.`);
+            }
+            return; // Stop execution after opening MR list page
+        }
 
-                // --- Step 3: Remote Origin Identification ---
-                const origin = await getOrigin(workspaceRoot);
-                outputChannel.appendLine(`Using origin URL: ${origin.remoteUrl}`); // Note: originUrl isn't directly used by git commands here, but good to have logged.
+        // --- Step 2: Proceed with MR creation for feature branches ---
+        // Branch starts with 'feat', continue with the original MR creation flow
+        try {
+            // --- Step 2a: Check for .git directory ---
+            try {
+                await fs.access(path.join(workspaceRoot, '.git'));
+                outputChannel.appendLine('Found .git directory.');
+            } catch (error) {
+                vscode.window.showErrorMessage('Current workspace is not a Git repository.');
+                outputChannel.appendLine('Error: .git directory not found.');
+                return;
+            }
 
-                // --- Step 4: Target Branch Determination ---
+            // --- Step 2b: Target Branch Determination ---
+            // Origin already fetched above
                 const targetBranch = await getTargetBranch(workspaceRoot, origin.remoteName);
                 outputChannel.appendLine(`Target branch set to: ${targetBranch}`);
 
@@ -410,7 +423,7 @@ async function activate(context) { // Restored async
                         return; // Stop execution here, do not switch branch
                     }
 
-                    // --- Step 9: Switch back to target branch locally ---
+                    // --- Step 8: Switch back to target branch locally ---
                     // This code will only be reached if the MR URL was found and opened (or failed to open)
                     outputChannel.appendLine(`Attempting to switch local branch to ${targetBranch}...`);
                     try {
@@ -437,9 +450,8 @@ async function activate(context) { // Restored async
 
             } catch (error) {
                 outputChannel.appendLine(`Unhandled error: ${error.message || error}`);
-                vscode.window.showErrorMessage(`GitLab MR Flow failed: ${error.message || 'Unknown error'}. Check Output channel.`);
+                vscode.window.showErrorMessage(`GitLab MR Flow failed for feature branch: ${error.message || 'Unknown error'}. Check Output channel.`);
             }
-        }
     });
 
     context.subscriptions.push(disposable); // Push the original command

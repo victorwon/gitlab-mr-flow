@@ -1,8 +1,7 @@
 # Change Log
 
-All notable changes to the "gitlab-mr-flow" extension will be documented in this file.
-
-Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
+## [1.1.1]
+- Open the MR list in browser even not on a feature branch
 
 ## [1.0.0]
 
