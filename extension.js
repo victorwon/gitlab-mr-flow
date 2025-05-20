@@ -296,15 +296,15 @@ async function activate(context) { // Restored async
         const origin = await getOrigin(workspaceRoot); // Get origin early
         outputChannel.appendLine(`Current branch: ${currentBranch}, Origin URL: ${origin.remoteUrl}`);
 
-        // --- Step 1: Handle non-feature branches ---
-        if (!currentBranch.startsWith('feat')) {
-            outputChannel.appendLine(`Current branch "${currentBranch}" does not start with "feat". Opening MR list page.`);
+        // --- Step 1: Open MR list page directly if not a feature or fix branch ---
+        if (!currentBranch.startsWith('feat') && !currentBranch.startsWith('fix')) {
+            outputChannel.appendLine(`Current branch "${currentBranch}" does not start with "feat" or "fix". Just open the MR list page.`);
             try {
                 const baseUrl = origin.remoteUrl.endsWith('.git') ? origin.remoteUrl.slice(0, -4) : origin.remoteUrl; // Remove .git if present
                 const mrListPageUrl = `${baseUrl}/-/merge_requests`;
                 outputChannel.appendLine(`Constructed MR List URL: ${mrListPageUrl}`);
                 await vscode.env.openExternal(vscode.Uri.parse(mrListPageUrl));
-                vscode.window.showInformationMessage(`Currently not on a feature branch with a prefix of 'feat'. No merge action performed, just open the Merge Requests page.`);
+                vscode.window.showInformationMessage(`Currently not on a feature or fix branch, open the MR list page instead.`);
             } catch (openError) {
                 outputChannel.appendLine(`Error constructing or opening MR List URL: ${openError.message}`);
                 vscode.window.showErrorMessage(`Could not open the Merge Requests page for branch "${currentBranch}". Check Output channel.`);
@@ -312,8 +312,8 @@ async function activate(context) { // Restored async
             return; // Stop execution after opening MR list page
         }
 
-        // --- Step 2: Proceed with MR creation for feature branches ---
-        // Branch starts with 'feat', continue with the original MR creation flow
+        // --- Step 2: Proceed with MR creation for feature/fix branches ---
+        // Continue with the original MR creation flow
         try {
             // --- Step 2a: Check for .git directory ---
             try {
@@ -380,7 +380,7 @@ async function activate(context) { // Restored async
                     '-o', `merge_request.create`,
                     '-o', `merge_request.target=${targetBranch}`,
                     '-o', `merge_request.remove_source_branch=false`, // Add option to keep source branch
-                    '-o', `merge_request.title=${currentBranch}` // Use feature branch name as MR name
+                    '-o', `merge_request.title=${currentBranch}` // Use branch name as MR name
                 ];
                 const pushResult = await runGitCommand(pushArgs, workspaceRoot, 'push and create merge request');
 
@@ -450,7 +450,7 @@ async function activate(context) { // Restored async
 
             } catch (error) {
                 outputChannel.appendLine(`Unhandled error: ${error.message || error}`);
-                vscode.window.showErrorMessage(`GitLab MR Flow failed for feature branch: ${error.message || 'Unknown error'}. Check Output channel.`);
+                vscode.window.showErrorMessage(`GitLab MR Flow failed for branch: ${error.message || 'Unknown error'}. Check Output channel.`);
             }
     });
 
